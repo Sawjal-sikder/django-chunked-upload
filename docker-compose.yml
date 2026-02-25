@@ -1,0 +1,20 @@
+services:
+  backend:
+    build: ./django-chunked-upload
+    ports:
+      - "8000:8000"
+    volumes:
+      - media_data:/app/media
+    environment:
+      - DJANGO_DEBUG=1
+      - DJANGO_ALLOWED_HOSTS=*
+
+  frontend:
+    build: ./react-chunked-upload
+    ports:
+      - "5173:4173"
+    depends_on:
+      - backend
+
+volumes:
+  media_data:

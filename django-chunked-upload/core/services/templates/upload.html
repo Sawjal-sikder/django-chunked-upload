@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chunked File Upload</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .container { background: #fff; padding: 40px; border-radius: 12px; box-shadow: 0 2px 20px rgba(0,0,0,0.1); width: 500px; max-width: 90vw; }
+        h1 { font-size: 22px; margin-bottom: 24px; color: #333; }
+        .drop-zone { border: 2px dashed #ccc; border-radius: 8px; padding: 40px 20px; text-align: center; color: #888; cursor: pointer; transition: all 0.2s; }
+        .drop-zone:hover, .drop-zone.dragover { border-color: #4a90d9; background: #f0f7ff; color: #4a90d9; }
+        .drop-zone input { display: none; }
+        .file-info { margin-top: 16px; padding: 12px; background: #f9f9f9; border-radius: 6px; font-size: 14px; color: #555; display: none; }
+        .progress-container { margin-top: 20px; display: none; }
+        .progress-bar { width: 100%; height: 24px; background: #eee; border-radius: 12px; overflow: hidden; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, #4a90d9, #357abd); width: 0%; transition: width 0.3s; border-radius: 12px; }
+        .progress-text { text-align: center; margin-top: 8px; font-size: 14px; color: #555; }
+        .status { margin-top: 16px; padding: 12px; border-radius: 6px; font-size: 14px; display: none; }
+        .status.success { background: #e8f5e9; color: #2e7d32; display: block; }
+        .status.error { background: #ffebee; color: #c62828; display: block; }
+        .status.uploading { background: #e3f2fd; color: #1565c0; display: block; }
+        .btn { margin-top: 20px; width: 100%; padding: 12px; border: none; border-radius: 8px; background: #4a90d9; color: #fff; font-size: 16px; cursor: pointer; transition: background 0.2s; }
+        .btn:hover { background: #357abd; }
+        .btn:disabled { background: #ccc; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Chunked File Upload</h1>
+
+        <div class="drop-zone" id="dropZone">
+            <p>Drag & drop a file here or click to select</p>
+            <input type="file" id="fileInput">
+        </div>
+
+        <div class="file-info" id="fileInfo"></div>
+
+        <button class="btn" id="uploadBtn" disabled>Upload</button>
+
+        <div class="progress-container" id="progressContainer">
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <div class="progress-text" id="progressText">0%</div>
+        </div>
+
+        <div class="status" id="statusMsg"></div>
+    </div>
+
+    {% load static %}
+    <script>
+        const CHUNK_SIZE = 20 * 1024 * 1024; // 20 MB
+        const API_URL = "/api/upload/";
+        const COMPLETE_URL = "/api/upload/complete/";
+
+        function getCookie(name) {
+            let cookieValue = null;
+            if (document.cookie && document.cookie !== "") {
+                const cookies = document.cookie.split(";");
+                for (let i = 0; i < cookies.length; i++) {
+                    const cookie = cookies[i].trim();
+                    if (cookie.substring(0, name.length + 1) === (name + "=")) {
+                        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                        break;
+                    }
+                }
+            }
+            return cookieValue;
+        }
+
+        const dropZone = document.getElementById("dropZone");
+        const fileInput = document.getElementById("fileInput");
+        const fileInfo = document.getElementById("fileInfo");
+        const uploadBtn = document.getElementById("uploadBtn");
+        const progressContainer = document.getElementById("progressContainer");
+        const progressFill = document.getElementById("progressFill");
+        const progressText = document.getElementById("progressText");
+        const statusMsg = document.getElementById("statusMsg");
+
+        let selectedFile = null;
+
+        // Drop zone events
+        dropZone.addEventListener("click", () => fileInput.click());
+        dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.classList.add("dragover"); });
+        dropZone.addEventListener("dragleave", () => dropZone.classList.remove("dragover"));
+        dropZone.addEventListener("drop", (e) => {
+            e.preventDefault();
+            dropZone.classList.remove("dragover");
+            if (e.dataTransfer.files.length) selectFile(e.dataTransfer.files[0]);
+        });
+        fileInput.addEventListener("change", () => { if (fileInput.files.length) selectFile(fileInput.files[0]); });
+
+        function selectFile(file) {
+            selectedFile = file;
+            const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+            const chunks = Math.ceil(file.size / CHUNK_SIZE);
+            fileInfo.style.display = "block";
+            fileInfo.innerHTML = `<strong>${file.name}</strong><br>Size: ${sizeMB} MB | Chunks: ${chunks} (20 MB each)`;
+            uploadBtn.disabled = false;
+            statusMsg.className = "status";
+        }
+
+        function formatBytes(bytes) {
+            if (bytes < 1024) return bytes + " B";
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+            if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + " MB";
+            return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+        }
+
+        uploadBtn.addEventListener("click", () => uploadFile());
+
+        async function uploadFile() {
+            if (!selectedFile) return;
+
+            uploadBtn.disabled = true;
+            progressContainer.style.display = "block";
+            statusMsg.className = "status uploading";
+            statusMsg.style.display = "block";
+
+            const totalChunks = Math.ceil(selectedFile.size / CHUNK_SIZE);
+            let uploadId = null;
+
+            for (let i = 0; i < totalChunks; i++) {
+                const start = i * CHUNK_SIZE;
+                const end = Math.min(start + CHUNK_SIZE, selectedFile.size);
+                const chunk = selectedFile.slice(start, end);
+
+                const formData = new FormData();
+                formData.append("file", chunk);
+
+                if (uploadId) {
+                    formData.append("upload_id", uploadId);
+                } else {
+                    formData.append("filename", selectedFile.name);
+                }
+
+                statusMsg.textContent = `Uploading chunk ${i + 1} of ${totalChunks} (${formatBytes(start)} - ${formatBytes(end)})...`;
+
+                try {
+                    const res = await fetch(API_URL, {
+                        method: "POST",
+                        headers: { "X-CSRFToken": getCookie("csrftoken") },
+                        body: formData,
+                    });
+
+                    if (!res.ok) {
+                        const err = await res.json();
+                        throw new Error(err.error || `HTTP ${res.status}`);
+                    }
+
+                    const data = await res.json();
+                    uploadId = data.upload_id;
+
+                    const percent = Math.round(((i + 1) / totalChunks) * 100);
+                    progressFill.style.width = percent + "%";
+                    progressText.textContent = `${percent}% (${formatBytes(data.offset)} / ${formatBytes(selectedFile.size)})`;
+                } catch (err) {
+                    statusMsg.className = "status error";
+                    statusMsg.textContent = `Error on chunk ${i + 1}: ${err.message}`;
+                    uploadBtn.disabled = false;
+                    return;
+                }
+            }
+
+            // Complete the upload
+            try {
+                const completeRes = await fetch(COMPLETE_URL, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-CSRFToken": getCookie("csrftoken"),
+                    },
+                    body: JSON.stringify({ upload_id: uploadId }),
+                });
+
+                if (!completeRes.ok) {
+                    const err = await completeRes.json();
+                    throw new Error(err.error || `HTTP ${completeRes.status}`);
+                }
+
+                const result = await completeRes.json();
+                statusMsg.className = "status success";
+                statusMsg.textContent = `Upload complete! File: ${result.upload.filename} (${formatBytes(result.upload.offset)})`;
+            } catch (err) {
+                statusMsg.className = "status error";
+                statusMsg.textContent = `Error completing upload: ${err.message}`;
+            }
+
+            uploadBtn.disabled = false;
+        }
+    </script>
+</body>
+</html>
