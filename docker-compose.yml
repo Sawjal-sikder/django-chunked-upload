@@ -4,7 +4,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - media_data:/app/media
+      - ./django-chunked-upload/core/media:/app/media
     environment:
       - DJANGO_DEBUG=1
       - DJANGO_ALLOWED_HOSTS=*
@@ -12,9 +12,6 @@ services:
   frontend:
     build: ./react-chunked-upload
     ports:
-      - "5173:4173"
+      - "5173:5173"
     depends_on:
       - backend
-
-volumes:
-  media_data:
